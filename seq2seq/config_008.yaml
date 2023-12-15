@@ -1,0 +1,74 @@
+# Config 0.8 - basic set-to-set transformer training
+"seed": 1
+"num_epochs": 10000
+"best_model_path": '/wynton/protected/home/rizk-jackson/jknecht/order_path_prediction/experiments/data/temp/models/m_008/transformer_0.0.8.pth'
+"loss_df_path": '/wynton/protected/home/rizk-jackson/jknecht/order_path_prediction/experiments/data/temp/models/m_008/loss_df.csv'
+"order2idx_path": '/wynton/protected/home/rizk-jackson/jknecht/order_path_prediction/experiments/data/temp/data_loaders/d_006/order_to_idx.txt' 
+"data_loader_path": '/wynton/protected/home/rizk-jackson/jknecht/order_path_prediction/experiments/data/temp/data_loaders/d_006/'
+
+
+"environment_characteristics": ["encounter_type",
+                                "ed_during_bus_hrs_yn",
+                                "n_prev_ed_1yr",
+                                "n_prev_inp_1yr",
+                                "means_of_arrival",
+                                "ed_disposition",
+                                "ed_admission_dep"]
+"patient_health_characteristics": ["acuity_level",
+                                   "abn_diastolic_bp_yn",
+                                   "abn_respiration_yn",
+                                   "abn_temp_yn",
+                                   "abn_pulse_yn",
+                                   "age_at_arrival",
+                                   "charlson_comorb_index",
+                                   "abn_systolic_bp_yn",
+                                   "abn_pulse_ox_yn",
+                                   "chief_complaint"]
+"cat_health_cols": ["abn_diastolic_bp_yn",
+                    "abn_respiration_yn",
+                    "abn_temp_yn",
+                    "abn_pulse_yn",
+                    "abn_systolic_bp_yn",
+                    "abn_pulse_ox_yn",
+                    "chief_complaint",
+                    "acuity_level"]
+
+"vt_star": 256
+"pairs_model_legnth": 211
+"max_seq_length": 80 # The max set length is 76. 
+
+# MODEL_DIM must equal EMB size and be a multiple of NHEAD
+"model_params":
+    "MODEL_DIM": 256 
+    "EMB_SIZE": 256
+    "NHEAD": 4
+    "FFN_HID_DIM": 256
+    "BATCH_SIZE": 32
+    "NUM_ENCODER_LAYERS": 1
+    "NUM_DECODER_LAYERS": 1
+    "DROPOUT": 0.6
+    "LR": 0.0001 
+    "PAT_INPUT_DIM": 946
+    "SRC_VOCAB_SIZE": 7783
+    "TGT_VOCAB_SIZE": 7783
+
+# NOTE: in simple set-2-set model we don't have a SEP token "really" so this is just EOS for first sequence. Otherwise = 4
+"BOS_idx": 1
+"EOS_idx": 2
+"UNK_idx": 3
+"PAD_idx": 0
+"SEP_idx": 2 
+"ABN_idx": 5
+"NOM_idx": 6
+"BOS_token": '<BOS>'
+"EOS_token": '<EOS>'
+"UNK_token": '<UNK>'
+"PAD_token": '<PAD>'
+"SEP_token": '<SEP>'
+
+"path":
+    "orders": "/wynton/protected/home/rizk-jackson/jknecht/ucbears_data_processed/processed/SIGNED_ORDERS.dta"
+    "patient_data": "/wynton/protected/home/rizk-jackson/jknecht/ucbears_data_processed/processed/ENCOUNTERS.dta"
+    "outcome_data": "/wynton/protected/home/rizk-jackson/jknecht/ucbears_data_processed/processed/encounter_orders_outcomes_df.csv"
+    "orders_inst": "/wynton/protected/home/rizk-jackson/jknecht/ucbears_data_processed/processed/INSTANTIATED_ORDERS.dta"
+    "orders_results": "/wynton/protected/home/rizk-jackson/jknecht/ucbears_data_processed/processed/ORDER_RESULTS.dta"
