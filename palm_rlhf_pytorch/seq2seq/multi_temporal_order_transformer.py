@@ -173,18 +173,52 @@ class Seq2SeqTransformer(nn.Module):
                                 )
         return self.generator(outs)
 
-    def encode(self, src_ord: Tensor, src_res: Tensor, src_mask: Tensor):
-        # Multimodal encoder: 
-        src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(src_ord)), 
-                            torch.mul(self.alpha_r, self.src_res_emb(src_res)))  
-        return self.transformer.encoder(self.dropout(src_emb), 
-                                        src_mask)
+    # def encode(self, src_ord: Tensor, src_res: Tensor, src_mask: Tensor):
+    #     # Multimodal encoder: 
+    #     src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(src_ord)), 
+    #                         torch.mul(self.alpha_r, self.src_res_emb(src_res)))  
+    #     return self.transformer.encoder(self.dropout(src_emb), 
+    #                                     src_mask)
 
-    def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
-        return self.transformer.decoder(self.dropout(self.tgt_tok_emb(tgt)), 
-                                        memory,
-                                        tgt_mask)
+    # def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
+    #     return self.transformer.decoder(self.dropout(self.tgt_tok_emb(tgt)), 
+    #                                     memory,
+    #                                     tgt_mask)
 
+def greedy_decode(model, src_ord, src_res, pat_cov, max_len, BOS_idx, EOS_idx):
+    model.eval()
+
+    src_pat_emb = model.pat_cov_emb(pat_cov)
+    src_pat_emb.unsqueeze(0).repeat(max_len, 1, 1)
+    src_emb = torch.add(torch.mul(model.alpha_o, model.src_ord_emb(src_ord)), 
+                        torch.mul(model.alpha_r, model.src_res_emb(src_res)))  
+    src_emb = torch.add(src_emb, src_pat_emb) # (80, 1, 256)
+    print(f"src_emb: {src_emb.shape}") 
+    memory = model.transformer.encoder(src_emb) # (80, 1, 256)
+    print(f"memory: {memory.shape}") 
+
+    # Start the output tensor with the start symbol
+    ys = torch.ones(1, 1).fill_(BOS_idx).type_as(src_ord.data)
+    print(f"ys: {ys.shape}")
+
+    for i in range(max_len-1):
+        #Decode one step at a time 
+        tgt_emb = model.tgt_tok_emb(ys)
+        print(f"tgt_emb: {tgt_emb.shape}")
+        out = model.transformer.decoder(tgt_emb, memory)
+        out = out.transpose(0,1)
+        prob = model.generator(out[:, -1])
+        _, next_word = torch.max(prob, dim=1)
+        next_word = next_word.item()
+
+        #Append the predicted word to the output sequence
+        ys = torch.cat([ys, torch.ones(1, 1).fill_(next_word).type_as(src_ord.data)], dim=0)
+        print(f"iteration{i}: {ys.shape}")
+
+        #Break if EOS token is predicted
+        if next_word == EOS_idx: 
+            break
+    return ys 
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
@@ -212,11 +246,11 @@ if __name__ == "__main__":
                                 
     )
 
-    # print(f"model.dim: {model.d_model}")
-    print(f"model.parameters: {model.parameters()}")
     # Load the saved model weights
     checkpoint = torch.load('transformer_0.0.8.pth', map_location=model_device)
     model.load_state_dict(checkpoint['model_state_dict'])
+
+    #set model to eval mode
     model.eval()
 
     # Load batch tensor
@@ -227,17 +261,22 @@ if __name__ == "__main__":
     pat_cov = batch_data[2][0] # Third tensor, add batch dim #(946, 1)
     trg = batch_data[3][0].unsqueeze(1)     # Fourth tensor, add batch dim  #(80,1)
 
-    print(f"orders: {orders.shape}")
-    print(f"results: {results.shape}")
-    print(f"pat_cov: {pat_cov.shape}")
-    print(f"trg: {trg.shape}")
 
-    output = model(
-        orders, results, pat_cov, trg
-    )
-    print(output) 
+    # straight up forward pass TODO: delete this later 
+    # output = model(
+    #     orders, results, pat_cov, trg
+    # )
+    # print(output) 
     # print(f"output shape: {output.shape}") #(1, 80, 7783)
 
     # Greedy decoding 
+    decoded = greedy_decode(model, 
+                            orders, 
+                            results, 
+                            pat_cov, 
+                            max_len=orders.shape[0], 
+                            BOS_idx=config['BOS_idx'],
+                            EOS_idx=config['EOS_idx'])
 
+    print(decoded)
 
