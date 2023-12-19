@@ -188,11 +188,12 @@ if __name__ == "__main__":
     # Load batch tensor
     batch_data = torch.load('batch_tensor.pt')
 
-    orders = batch_data[0][0].unsqueeze(0)  # First tensor, add batch dim #(1,80)
-    results = batch_data[1][0].unsqueeze(0)  # Second tensor, add batch dim  #(1,80)
-    pat_cov = batch_data[2][0].unsqueeze(0) # Third tensor, add batch dim #(1,946)
-    trg = batch_data[3][0].unsqueeze(0)     # Fourth tensor, add batch dim  #(1,80)
+    # orders = batch_data[0][0].unsqueeze(0)  # First tensor, add batch dim #(1,80)
+    # results = batch_data[1][0].unsqueeze(0)  # Second tensor, add batch dim  #(1,80)
+    # pat_cov = batch_data[2][0].unsqueeze(0) # Third tensor, add batch dim #(1,946)
+    # trg = batch_data[3][0].unsqueeze(0)     # Fourth tensor, add batch dim  #(1,80)
 
+    print(f"adding second dimension at the back: {batch_data[0][0].unsqueeze(1)}")
     # If we try to do autoregressive generation: - #TODO: comment this out when finished testing
     # trg = torch.tensor([[config['BOS_idx']]], device=model_device)
     # print(f"printing start_trg: {trg}, trg_shape: {trg.shape}")

@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Oct 13 13:47:01 2023
+
+@author: knechtj
+"""
+
 from torch import Tensor
 import torch
 import torch.nn as nn
@@ -5,10 +12,14 @@ from torch.nn import Transformer
 import math
 import pickle
 import pandas as pd
+# from order_path_dataset import OrderPathDataset
+# from order_path_dataset import OrderPathProcessing
 from torch.utils.data import DataLoader
 import yaml
 
+# NOTE: temporarily setting this globally 
 
+# helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
 class PositionalEncoding(nn.Module):
     def __init__(self,
                  emb_size: int,
@@ -29,6 +40,17 @@ class PositionalEncoding(nn.Module):
     def forward(self, token_embedding: Tensor):
         return self.dropout(token_embedding + self.pos_embedding[:token_embedding.size(0), :])
 
+# NOTE: We don't want to positionally encode the input sequence, just apply drop-out. 
+# TODO: Check that the dim of the output here still makes sense. 
+class ApplyDropout(nn.Module):
+    def __init__(self,
+                 dropout: float):
+        self.dropout = nn.Dropout(dropout)
+    def forward(self, token_embedding: Tensor):
+        return self.dropout(token_embedding)
+
+
+# helper Module to convert tensor of input indices into corresponding tensor of token embeddings
 class TokenEmbedding(nn.Module):
     def __init__(self, vocab_size: int, emb_size, padding_idx: int):
         super(TokenEmbedding, self).__init__()
@@ -50,6 +72,30 @@ class PatientEmbedding(nn.Module):
         x = x.to(torch.float32)
         return self.linear_embedding(x)
 
+
+# token masking
+def generate_square_subsequent_mask(device, sz):
+    mask = (torch.triu(torch.ones((sz, sz), device=device)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
+
+
+def create_mask(config, device, src, tgt):
+    src_seq_len = src.shape[0]
+    tgt_seq_len = tgt.shape[0]
+
+    tgt_mask = generate_square_subsequent_mask(device, tgt_seq_len)
+    # NOTE: our source mask is FALSE everywhere since the model can attend to the entire set
+    src_mask = torch.zeros((src_seq_len, src_seq_len),device=device).type(torch.bool)
+    src_padding_mask = (src == config["PAD_idx"]).transpose(0, 1)
+    tgt_padding_mask = (tgt == config["PAD_idx"]).transpose(0, 1)
+    return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
+
+
+# Seq2Seq Network
+# This is the standard pytorch transformer model for translation tasks
+# Seq2Seq Network
+# This is the standard pytorch transformer model for translation tasks
 class Seq2SeqTransformer(nn.Module):
     def __init__(self,
                  d_model: int,
@@ -64,45 +110,45 @@ class Seq2SeqTransformer(nn.Module):
                  tgt_vocab_size: int, 
                  padding_idx: int, 
                  dim_feedforward: int, 
-                 dropout: float, 
-                 BOS_idx: int, 
-                 EOS_idx: int):
+                 dropout: float):
         super(Seq2SeqTransformer, self).__init__()
         self.d_model = d_model
         self.emb_size = emb_size
-        self.seq_length = seq_length 
+        self.seq_length = seq_length # NOTE: This is auto-pop. for the standard embeddings given the O-seq-length
+        # Need this for the patient X emb. which needs to match the seq-length for repetition 
         self.transformer = Transformer(d_model=d_model,
                                        nhead=nhead,
                                        num_encoder_layers=num_encoder_layers,
                                        num_decoder_layers=num_decoder_layers,
                                        dim_feedforward=dim_feedforward,
-                                       dropout=dropout
-                                       )
+                                       dropout=dropout)
         self.generator = nn.Linear(emb_size, tgt_vocab_size)
-
-        #Embeddings: 
+        # may want a custom embedding class, for now keep this and ensure its learned. 
         self.src_ord_emb = TokenEmbedding(src_vocab_size, 
                                           emb_size, 
                                           padding_idx)
 
+        # fix the embedding for the missing order outcomes to 0 vector (or something)
         self.src_res_emb = TokenEmbedding(src_vocab_size, 
                                           emb_size, 
                                           padding_idx)
         
+        # patinput_dim = opd.__getitem__(0)[2][0].long().shape = 841
         self.pat_cov_emb = PatientEmbedding(946, 
                                             pat_emb_size)
 
+        # weighted sum params. are learnable
         self.alpha_o = torch.nn.Parameter(torch.randn(1))
+        # self.alpha_o.requires_grad = True
         self.alpha_r = torch.nn.Parameter(torch.randn(1))
+        # self.alpha_r.requires_grad = True
 
+        # The target token embeddings stay the same
         self.tgt_tok_emb = TokenEmbedding(tgt_vocab_size, 
                                           emb_size, 
                                           padding_idx)
-
         self.dropout = nn.Dropout(dropout)
-        self.padding_idx = padding_idx
-
-
+        
     def forward(self,
                 orders: Tensor, 
                 results: Tensor, 
@@ -110,68 +156,35 @@ class Seq2SeqTransformer(nn.Module):
                 trg: Tensor
                 ):
 
-        # Propagate embeddings
+        print("Order:", orders.shape)
+        print("Results:", results.shape)
+        # Multimodal embedding: adding each source embedding w. weights from above
         src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(orders)), 
                             torch.mul(self.alpha_r, self.src_res_emb(results)))  
+        print("SRC Emb:", src_emb.shape)
+        src_pat_emb = self.pat_cov_emb(pat_cov)
+        src_pat_emb = src_pat_emb.unsqueeze(0).repeat(self.seq_length, 1, 1)
+        print("PAT Emb:", src_pat_emb.shape)
 
-        src_pat_emb = self.pat_cov_emb(pat_cov) #shape: (1, 256)
-
-        print(f"src_pat_emb.shape: {src_pat_emb.shape}")
-        batch_size = src_emb.size(0) # get the batch size from src_emb
-
-        src_pat_emb = src_pat_emb.unsqueeze(1).repeat(1, self.seq_length, 1)
-        trg_emb = self.tgt_tok_emb(trg)
-        
-        # src_pat_emb = src_pat_emb.unsqueeze(0).repeat(self.seq_length, 1, 1) - #Old 
-
-        # src_mask = self.generate_square_subsequent_mask(orders.shape[1])
-        #print(f"src_mask: {src_mask}, src_mask shape: {src_mask.shape}")
-        # trg_mask = self.generate_square_subsequent_mask(trg.shape[1])
-        #print(f"trg_mask: {trg_mask}, trg_mask shape: {trg_mask.shape}")
-
-        # src_padding_mask = self.create_padding_mask(orders)
-        #print(f"src_padding_mask: {src_padding_mask}, src_padding_mask shape: {src_padding_mask.shape}")
-        # trg_padding_mask = self.create_padding_mask(trg)
-        #print(f"trg_padding_mask: {trg_padding_mask}, trg_padding_mask shape: {trg_padding_mask.shape}")
-        
-        outs = self.transformer(src=src_emb, 
-                                tgt=trg_emb, 
-                                # src_mask=src_mask, 
-                                # tgt_mask=trg_mask, 
-                                # src_is_causal=True,
-                                # tgt_is_causal=True, #tell the model to expect a target mask
-                                # src_key_padding_mask=src_padding_mask, 
-                                # tgt_key_padding_mask=trg_padding_mask #TODO: still need to figure out the exact correct dimensions
+        src_emb = torch.add(src_emb, src_pat_emb) 
+        tgt_emb = self.tgt_tok_emb(trg)
+        outs = self.transformer(src_emb, 
+                                tgt_emb
                                 )
-                                
-        return self.generator(outs) # output size = torch.Size([1, 80, 7783])
+        return self.generator(outs)
 
-    def generate_square_subsequent_mask(self, sz):
-        mask = torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
-        return mask
+    def encode(self, src_ord: Tensor, src_res: Tensor, src_mask: Tensor):
+        # Multimodal encoder: 
+        src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(src_ord)), 
+                            torch.mul(self.alpha_r, self.src_res_emb(src_res)))  
+        return self.transformer.encoder(self.dropout(src_emb), 
+                                        src_mask)
 
-    def create_padding_mask(self, seq):
-        return (seq == 0) #hard coding PAD-IDX token for now
+    def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
+        return self.transformer.decoder(self.dropout(self.tgt_tok_emb(tgt)), 
+                                        memory,
+                                        tgt_mask)
 
-    def generate(self, orders, results, pat_cov, BOS_idx, EOS_idx, seq_length):
-        '''
-        Generate a sequence using the seq2seq model.
-        '''
-        device = orders.device #assuming all inputs are on the same device 
-        trg = torch.tensor([[BOS_idx]], dtype=torch.long, device=device)
-
-        for _ in range(seq_length - 1): #-1 because we start with the start token
-            output = self.forward(orders, results, pat_cov, trg)
-
-            # Get the next token (assuming output is logits; adjust as needed)
-            next_token = torch.argmax(output[:, -1, :], dim=-1)
-            # Append the next token to the target sequence
-            trg = torch.cat([trg, next_token.unsqueeze(-1)], dim=-1)
-        
-            # Break if EOS token is generated 
-            if next_token.item() == EOS_idx:
-                break
-            return trg 
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
@@ -195,9 +208,7 @@ if __name__ == "__main__":
                                tgt_vocab_size=model_params['TGT_VOCAB_SIZE'], 
                                padding_idx=config['PAD_idx'],
                                dim_feedforward=model_params['FFN_HID_DIM'],
-                               dropout=model_params['DROPOUT'], 
-                               BOS_idx=config['BOS_idx'], 
-                               EOS_idx=config['EOS_idx']
+                               dropout=model_params['DROPOUT']
                                 
     )
 
@@ -211,25 +222,22 @@ if __name__ == "__main__":
     # Load batch tensor
     batch_data = torch.load('batch_tensor.pt')
 
-    orders = batch_data[0][0].unsqueeze(0)  # First tensor, add batch dim #(1,80)
-    results = batch_data[1][0].unsqueeze(0)  # Second tensor, add batch dim  #(1,80)
-    pat_cov = batch_data[2][0].unsqueeze(0) # Third tensor, add batch dim #(1,946)
-    trg = batch_data[3][0].unsqueeze(0)     # Fourth tensor, add batch dim  #(1,80)
-    
-    # print("printing orders...")
-    # print(orders)
-    # print("printing trg...")
-    # print(trg)
+    orders = batch_data[0][0].unsqueeze(1)  # First tensor, add batch dim #(80,1)
+    results = batch_data[1][0].unsqueeze(1)  # Second tensor, add batch dim  #(80,1)
+    pat_cov = batch_data[2][0] # Third tensor, add batch dim #(946, 1)
+    trg = batch_data[3][0].unsqueeze(1)     # Fourth tensor, add batch dim  #(80,1)
 
-    # If we try to do autoregressive generation: - #TODO: comment this out when finished testing
-    trg = torch.tensor([[config['BOS_idx']]], device=model_device)
-    print(f"printing start_trg: {trg}, trg_shape: {trg.shape}")
+    print(f"orders: {orders.shape}")
+    print(f"results: {results.shape}")
+    print(f"pat_cov: {pat_cov.shape}")
+    print(f"trg: {trg.shape}")
 
     output = model(
         orders, results, pat_cov, trg
-    ) #(1, 80, 7783) - original 
-
-
-
+    )
     print(output) 
-    print(f"output shape: {output.shape}") #(1, 80, 7783)
+    # print(f"output shape: {output.shape}") #(1, 80, 7783)
+
+    # Greedy decoding 
+
+
