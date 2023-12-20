@@ -17,8 +17,6 @@ import pandas as pd
 from torch.utils.data import DataLoader
 import yaml
 
-# NOTE: temporarily setting this globally 
-
 # helper Module that adds positional encoding to the token embedding to introduce a notion of word order.
 class PositionalEncoding(nn.Module):
     def __init__(self,
@@ -92,10 +90,6 @@ def create_mask(config, device, src, tgt):
     return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
 
 
-# Seq2Seq Network
-# This is the standard pytorch transformer model for translation tasks
-# Seq2Seq Network
-# This is the standard pytorch transformer model for translation tasks
 class Seq2SeqTransformer(nn.Module):
     def __init__(self,
                  d_model: int,
@@ -155,72 +149,78 @@ class Seq2SeqTransformer(nn.Module):
                 pat_cov: Tensor, 
                 trg: Tensor
                 ):
-
-        print("Order:", orders.shape)
-        print("Results:", results.shape)
-        # Multimodal embedding: adding each source embedding w. weights from above
-        src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(orders)), 
-                            torch.mul(self.alpha_r, self.src_res_emb(results)))  
-        print("SRC Emb:", src_emb.shape)
-        src_pat_emb = self.pat_cov_emb(pat_cov)
-        src_pat_emb = src_pat_emb.unsqueeze(0).repeat(self.seq_length, 1, 1)
-        print("PAT Emb:", src_pat_emb.shape)
-
-        src_emb = torch.add(src_emb, src_pat_emb) 
-        tgt_emb = self.tgt_tok_emb(trg)
+        src_emb, trg_emb = preprocess(self, orderes, results, pat_cov, trg)
         outs = self.transformer(src_emb, 
                                 tgt_emb
                                 )
         return self.generator(outs)
+    def preprocess(self, 
+                   orders: Tensor, 
+                   results: Tensor, 
+                   pat_cov: Tensor, 
+                   trg: Tensor): 
+        '''
+        Preprocesses input tensors to create source and target embeddings
+        Parameters: 
+            - orders (tensor): [(80,1)] 
+            - results (tensor): [(80, 1)] 
+            - pat_cov (tensor): [(946)] 
+            - trg (tensor: [(80, 1)]
+        Returns: 
+            - src_emb (tensor): [(80,1,256)] (S, B, E)
+            - trg_emb (tensor: [(80,1,256)] (S, B, E)
+        '''
+        # Create source embeddings
+        src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(orders)),
+                            torch.mul(self.alpha_r, self.src_res_emb(results)))
+        
+        # Patient embedding repeated to match sequence length
+        src_pat_emb = self.pat_cov_emb(pat_cov)
+        src_pat_emb = src_pat_emb.unsqueeze(0).repeat(self.seq_length, 1, 1)
+        
+        # Combine all source embeddings
+        src_emb = torch.add(src_emb, src_pat_emb)
 
-    # def encode(self, src_ord: Tensor, src_res: Tensor, src_mask: Tensor):
-    #     # Multimodal encoder: 
-    #     src_emb = torch.add(torch.mul(self.alpha_o, self.src_ord_emb(src_ord)), 
-    #                         torch.mul(self.alpha_r, self.src_res_emb(src_res)))  
-    #     return self.transformer.encoder(self.dropout(src_emb), 
-    #                                     src_mask)
+        # Target embeddings
+        tgt_emb = self.tgt_tok_emb(trg)
+        return src_emb, tgt_emb
 
-    # def decode(self, tgt: Tensor, memory: Tensor, tgt_mask: Tensor):
-    #     return self.transformer.decoder(self.dropout(self.tgt_tok_emb(tgt)), 
-    #                                     memory,
-    #                                     tgt_mask)
+    def greedy_decode(self, orders, results, pat_cov, trg, BOS_idx, EOS_idx): 
+        '''
+        Autoregressively generates tokens using greedy decoding.
+        '''
+        self.eval()
 
-def greedy_decode(model, src_ord, src_res, pat_cov, max_len, BOS_idx, EOS_idx):
-    '''
-    autoregressively generate tokens using greedy decoding 
-    '''
-    model.eval()
+        #Preprocess inputs to get src_meb 
+        src_emb, _ = self.preprocess(orders, results, pat_cov, trg)
+        max_len = orders.shape[0]
 
-    src_pat_emb = model.pat_cov_emb(pat_cov)
-    src_pat_emb.unsqueeze(0).repeat(max_len, 1, 1)
-    src_emb = torch.add(torch.mul(model.alpha_o, model.src_ord_emb(src_ord)), 
-                        torch.mul(model.alpha_r, model.src_res_emb(src_res)))  
-    src_emb = torch.add(src_emb, src_pat_emb) # (80, 1, 256)
-    memory = model.transformer.encoder(src_emb) # (80, 1, 256)
+        # forward pass through encoder using src embeddings
+        memory = model.transformer.encoder(src_emb) # (80, 1, 256)
 
-    # Start the output tensor with the start symbol
-    ys = torch.ones(1, 1).fill_(BOS_idx).type_as(src_ord.data)
+        # Start the output tensor with the start symbol
+        ys = torch.ones(1, 1).fill_(BOS_idx).type_as(orders.data)
+        for i in range(max_len-1):
+            #Decode one step at a time 
+            tgt_emb = self.tgt_tok_emb(ys)
+            out = self.transformer.decoder(tgt_emb, memory)
+            out = out.transpose(0,1)
+            #pass embeddings through generator to get out logits
+            prob = self.generator(out[:, -1]) 
+            _, next_word = torch.max(prob, dim=1)
+            #convert to python int
+            next_word = next_word.item() #convert to python int
 
-    for i in range(max_len-1):
-        #Decode one step at a time 
-        tgt_emb = model.tgt_tok_emb(ys)
-        out = model.transformer.decoder(tgt_emb, memory)
-        out = out.transpose(0,1)
-        #pass embeddings through generator to get out logits
-        prob = model.generator(out[:, -1]) 
-        _, next_word = torch.max(prob, dim=1)
-        #convert to python int
-        next_word = next_word.item() #convert to python int
+            #Append the predicted word to the output sequence
+            ys = torch.cat([ys, torch.ones(1, 1).fill_(next_word).type_as(orders.data)], dim=0)
 
-        #Append the predicted word to the output sequence
-        ys = torch.cat([ys, torch.ones(1, 1).fill_(next_word).type_as(src_ord.data)], dim=0)
-
-        #Break if EOS token is predicted
-        if next_word == EOS_idx: 
-            break
-    return ys 
+            #Break if EOS token is predicted
+            if next_word == EOS_idx: 
+                break
+        return ys 
 
 if __name__ == "__main__":
+    #For testing only 
     if torch.cuda.is_available():
         model_device = torch.device('cuda')
     else:
@@ -261,22 +261,14 @@ if __name__ == "__main__":
     pat_cov = batch_data[2][0] # Third tensor, add batch dim #(946, 1)
     trg = batch_data[3][0].unsqueeze(1)     # Fourth tensor, add batch dim  #(80,1)
 
-
-    # straight up forward pass TODO: delete this later 
-    # output = model(
-    #     orders, results, pat_cov, trg
-    # )
-    # print(output) 
-    # print(f"output shape: {output.shape}") #(1, 80, 7783)
-
     # Greedy decoding 
-    decoded = greedy_decode(model, 
-                            orders, 
-                            results, 
-                            pat_cov, 
-                            max_len=orders.shape[0], 
-                            BOS_idx=config['BOS_idx'],
-                            EOS_idx=config['EOS_idx'])
+    decoded = model.greedy_decode(orders, 
+                                results, 
+                                pat_cov, 
+                                trg,
+                                BOS_idx=config['BOS_idx'],
+                                EOS_idx=config['EOS_idx'])
+
 
     print(decoded)
 
