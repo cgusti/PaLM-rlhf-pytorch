@@ -193,6 +193,9 @@ class Seq2SeqTransformer(nn.Module):
 
         #Preprocess inputs to get src_meb 
         src_emb, _ = self.preprocess(orders, results, pat_cov, trg)
+        #src_mask = self.generate_square_subsequent_mask(orders.shape[0]) #we actually don't need this 
+
+        # get max seq length 
         max_len = orders.shape[0]
 
         # forward pass through encoder using src embeddings
@@ -203,7 +206,9 @@ class Seq2SeqTransformer(nn.Module):
         for i in range(max_len-1):
             #Decode one step at a time 
             tgt_emb = self.tgt_tok_emb(ys)
-            out = self.transformer.decoder(tgt_emb, memory)
+            tgt_mask = (self.generate_square_subsequent_mask(ys.size(0))
+                    .type(torch.bool))
+            out = self.transformer.decoder(tgt_emb, memory, tgt_mask)
             out = out.transpose(0,1)
             #pass embeddings through generator to get out logits
             prob = self.generator(out[:, -1]) 
@@ -218,6 +223,19 @@ class Seq2SeqTransformer(nn.Module):
             if next_word == EOS_idx: 
                 break
         return ys 
+
+    def generate_square_subsequent_mask(self, sz):
+        '''
+        generate upper triangle token mask 
+        '''
+        mask = torch.triu(torch.ones(sz, sz) * float('-inf'), diagonal=1)
+        return mask
+
+    def create_padding_mask(self, seq):
+        '''
+        generate padding masks 
+        '''
+        return (seq == self.padding_idx) #hard coding PAD-IDX token for now
 
 if __name__ == "__main__":
     #For testing only 
