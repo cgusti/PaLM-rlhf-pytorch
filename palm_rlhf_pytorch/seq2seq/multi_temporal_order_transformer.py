@@ -182,17 +182,20 @@ class Seq2SeqTransformer(nn.Module):
         src_emb = torch.add(src_emb, src_pat_emb)
 
         # Target embeddings
-        tgt_emb = self.tgt_tok_emb(trg)
+        if trg is None: 
+            tgt_emb = None # when we are in evaluation mode
+        else:
+            tgt_emb = self.tgt_tok_emb(trg)
         return src_emb, tgt_emb
 
-    def greedy_decode(self, orders, results, pat_cov, trg, BOS_idx, EOS_idx): 
+    def greedy_decode(self, orders, results, pat_cov, BOS_idx, EOS_idx): 
         '''
         Autoregressively generates tokens using greedy decoding.
         '''
         self.eval()
 
         #Preprocess inputs to get src_meb 
-        src_emb, _ = self.preprocess(orders, results, pat_cov, trg)
+        src_emb, _ = self.preprocess(orders, results, pat_cov, trg=None)
         #src_mask = self.generate_square_subsequent_mask(orders.shape[0]) #we actually don't need this 
 
         # get max seq length 
@@ -283,7 +286,6 @@ if __name__ == "__main__":
     decoded = model.greedy_decode(orders, 
                                 results, 
                                 pat_cov, 
-                                trg,
                                 BOS_idx=config['BOS_idx'],
                                 EOS_idx=config['EOS_idx'])
 
