@@ -187,8 +187,8 @@ class ActorCritic(nn.Module):
 
     def forward(
         self,
-        x,
-        mask = None,
+        x, 
+        mask=None,
         return_values = True
     ):
         '''forward pass through the actor critic network'''
@@ -521,6 +521,7 @@ class RLHFTrainer(nn.Module):
             ) in dl:
                 action_masks = ~prompt_masks & masks
 
+                #pass through forward method #TODO: investigate this further
                 action_logits, values = self.actor_critic(
                     sequences,
                     mask = action_masks
@@ -617,7 +618,9 @@ class RLHFTrainer(nn.Module):
         temperature = 1.
     ):
         '''
-        repeatedly selects prompts, generates sequences using the actor-critic model, evaluates the generated sequences using the reward model, and stores memories for learning. After a certain number of timesteps, it calls the learn method to update the actor-critic model using stored memories.
+        repeatedly selects prompts, generates sequences using the actor-critic model, 
+        evaluates the generated sequences using the reward model, 
+        and stores memories for learning. After a certain number of timesteps, it calls the learn method to update the actor-critic model using stored memories.
         '''
         device = self.device
 
